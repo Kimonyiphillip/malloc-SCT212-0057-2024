@@ -113,6 +113,97 @@ static void split_block(block_t *block, size_t size)
     block->next = new_block;
     block->size = size;
 }
+* Obtain more memory from the operating system.
+ * The minimum growth amount is 64 KB.
+ */
+static block_t *grow_heap(size_t size)
+{
+    if (size > SIZE_MAX - HDR)
+        return NULL;
+
+    size_t chunk = size + HDR;
+
+    if (chunk < MIN_HEAP_SIZE)
+        chunk = MIN_HEAP_SIZE;
+
+    chunk = align_up(chunk);
+
+    if (chunk == 0)
+        return NULL;
+
+    void *old_break = sbrk(0);
+
+    if (old_break == (void *)-1)
+        return NULL;
+
+    uintptr_t address = (uintptr_t)old_break;
+
+    size_t padding =
+        (ALIGNMENT - (address % ALIGNMENT)) % ALIGNMENT;
+
+    if (chunk > SIZE_MAX - padding)
+        return NULL;
+
+    size_t total = chunk + padding;
+
+    if (total > (size_t)INTPTR_MAX)
+        return NULL;
+
+    void *memory = sbrk((intptr_t)total);
+
+    if (memory == (void *)-1)
+        return NULL;
+
+    block_t *block =
+        (block_t *)((char *)memory + padding);
+
+    block->size = chunk - HDR;
+    block->free = 1;
+    block->magic = MAGIC;
+    block->next = NULL;
+    block->prev = tail;
+
+    if (tail != NULL)
+        tail->next = block;
+    else
+        head = block;
+
+    tail = block;
+
+    total_heap_bytes += total;
+
+    return block;
+}
+
+/* Merge physically adjacent free blocks. */
+static void coalesce(void)
+{
+    block_t *current = head;
+
+    while (current != NULL && current->next != NULL) {
+
+        block_t *next = current->next;
+
+        if (current->free &&
+            next->free &&
+            adjacent(current, next)) {
+
+            current->size += HDR + next->size;
+
+            current->next = next->next;
+
+            if (current->next != NULL)
+                current->next->prev = current;
+            else
+                tail = current;
+
+            next->magic = 0;
+
+        } else {
+            current = current->next;
+        }
+    }
+}
 
 
 
