@@ -275,105 +275,182 @@ void *my_calloc(size_t nmemb, size_t size)
 
     return ptr;
 }
-
-
-
-
-
-
-
-
-
-
-/* Round header size up to a multiple of 16. */
-#define HDR ((sizeof(block_t) + ALIGNMENT - 1) & ~(size_t)(ALIGNMENT - 1))
-
-/* First and last blocks in our allocator's linked list. */
-static block_t *head = NULL;
-static block_t *tail = NULL;
-
-/* Total bytes obtained from the operating system. */
-static size_t total_heap_bytes = 0;
-
-/* Allocation policy: first-fit is the default. */
-static fit_policy_t current_policy = FIT_FIRST;
-
-/* Round a requested size up to a multiple of 16. */
-size_t align_up(size_t n)
-{
-    if (n > SIZE_MAX - (ALIGNMENT - 1)) {
-        return 0;
-    }
-
-    return (n + ALIGNMENT - 1) & ~(size_t)(ALIGNMENT - 1);
-}
-
-/* Convert a block header address into its payload address. */
-void *payload(block_t *block)
-{
-    return (char *)block + HDR;
-}
-
-/* Convert a payload address back into its block header. */
-block_t *header(void *ptr)
-{
-    return (block_t *)((char *)ptr - HDR);
-}
-
-/*
- * Temporary API placeholders.
- * We will replace these as we complete the remaining tasks.
- */
-
-void *my_malloc(size_t size)
-{
-    (void)size;
-    return NULL;
-}
-
-void my_free(void *ptr)
-{
-    (void)ptr;
-}
-
-void *my_calloc(size_t nmemb, size_t size)
-{
-    (void)nmemb;
-    (void)size;
-    return NULL;
-}
-
+/* Resize an allocated memory block. */
 void *my_realloc(void *ptr, size_t size)
 {
-    (void)ptr;
-    (void)size;
-    return NULL;
+    if (ptr == NULL)
+        return my_malloc(size);
+
+    if (size == 0) {
+        my_free(ptr);
+        return NULL;
+    }
+
+    block_t *block = find_block(ptr);
+
+    if (block == NULL || block->magic != MAGIC || block->free)
+        return NULL;
+
+    size_t new_size = align_up(size);
+
+    if (new_size == 0)
+        return NULL;
+
+    /* Existing block is already large enough. */
+    if (new_size <= block->size) {
+        split_block(block, new_size);
+        coalesce();
+        return ptr;
+    }
+
+    /* Try to expand into the next physically adjacent free block. */
+    while (block->next != NULL &&
+           block->next->free &&
+           adjacent(block, block->next)) {
+
+        block_t *next = block->next;
+
+        block->size += HDR + next->size;
+        block->next = next->next;
+
+        if (block->next != NULL)
+            block->next->prev = block;
+        else
+            tail = block;
+
+        next->magic = 0;
+
+        if (block->size >= new_size) {
+            split_block(block, new_size);
+            return ptr;
+        }
+    }
+
+    /* Allocate a new block and copy the old contents. */
+    void *new_ptr = my_malloc(size);
+
+    if (new_ptr == NULL)
+        return NULL;
+
+    memcpy(new_ptr, ptr, block->size);
+
+    my_free(ptr);
+
+    return new_ptr;
 }
 
+/* Collect allocator statistics. */
 void heap_stats(heap_stats_t *out)
 {
-    if (out != NULL) {
-        memset(out, 0, sizeof(*out));
-        out->heap_bytes = total_heap_bytes;
+    if (out == NULL)
+        return;
+
+    memset(out, 0, sizeof(*out));
+
+    out->heap_bytes = total_heap_bytes;
+
+    block_t *current = head;
+
+    while (current != NULL) {
+
+        out->blocks++;
+
+        if (current->free) {
+            out->free_blocks++;
+            out->free_bytes += current->size;
+
+            if (current->size > out->largest_free)
+                out->largest_free = current->size;
+
+        } else {
+            out->used_bytes += current->size;
+        }
+
+        current = current->next;
     }
 }
 
+/* Display every block using write(). */
 void heap_dump(void)
 {
-    /* Implemented in Task 7. */
-}
+    char buffer[160];
 
-void set_policy(fit_policy_t p)
-{
-    if (p == FIT_FIRST || p == FIT_BEST) {
-        current_policy = p;
+    block_t *current = head;
+
+    while (current != NULL) {
+
+        int length = snprintf(
+            buffer,
+            sizeof(buffer),
+            "Address: %p | Size: %zu | %s\n",
+            (void *)current,
+            current->size,
+            current->free ? "FREE" : "USED"
+        );
+
+        if (length > 0) {
+            size_t output_length = (size_t)length;
+
+            if (output_length >= sizeof(buffer))
+                output_length = sizeof(buffer) - 1;
+
+            write(STDOUT_FILENO, buffer, output_length);
+        }
+
+        current = current->next;
     }
 }
 
+// Change the allocation placement policy.
+void set_policy(fit_policy_t p)
+{
+    if (p == FIT_FIRST || p == FIT_BEST)
+        current_policy = p;
+}
+
+// Verify the internal consistency of the heap.
 int heap_check(void)
 {
-    (void)head;
-    (void)tail;
-    (void)current_policy;
+    block_t *current = head;
+    block_t *previous = NULL;
+
+    while (current != NULL) {
+
+        if (current->magic != MAGIC)
+            return 0;
+
+        if (((uintptr_t)payload(current) % ALIGNMENT) != 0)
+            return 0;
+
+        if (current->size % ALIGNMENT != 0)
+            return 0;
+
+        if (current->prev != previous)
+            return 0;
+
+        if (previous != NULL) {
+
+            if ((uintptr_t)current <= (uintptr_t)previous)
+                return 0;
+
+            if (previous->free &&
+                current->free &&
+                adjacent(previous, current))
+                return 0;
+        }
+
+        previous = current;
+        current = current->next;
+    }
+
+    if (previous != tail)
+        return 0;
+
+    if (head != NULL && head->prev != NULL)
+        return 0;
+
+    if (tail != NULL && tail->next != NULL)
+        return 0;
+
     return 1;
 }
