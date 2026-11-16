@@ -40,6 +40,80 @@ static size_t align_up(size_t size)
     return (size + ALIGNMENT - 1) & ~(size_t)(ALIGNMENT - 1);
 }
 
+/* Return the payload address of a block. */
+static void *payload(block_t *block)
+{
+    return (char *)block + HDR;
+}
+
+/* Find the block that owns an exact payload pointer. */
+static block_t *find_block(void *ptr)
+{
+    block_t *current = head;
+
+    while (current != NULL) {
+        if (payload(current) == ptr)
+            return current;
+
+        current = current->next;
+    }
+
+    return NULL;
+}
+
+/* Check whether two blocks are physically adjacent. */
+static int adjacent(block_t *a, block_t *b)
+{
+    return (char *)a + HDR + a->size == (char *)b;
+}
+
+/* Find a suitable free block according to the selected policy. */
+static block_t *find_fit(size_t size)
+{
+    block_t *current = head;
+    block_t *best = NULL;
+
+    while (current != NULL) {
+        if (current->free && current->size >= size) {
+
+            if (current_policy == FIT_FIRST)
+                return current;
+
+            if (best == NULL || current->size < best->size)
+                best = current;
+        }
+
+        current = current->next;
+    }
+
+    return best;
+}
+
+/* Split a large free block when enough space remains. */
+static void split_block(block_t *block, size_t size)
+{
+    if (block->size < size + HDR + ALIGNMENT)
+        return;
+
+    block_t *new_block =
+        (block_t *)((char *)payload(block) + size);
+
+    new_block->size = block->size - size - HDR;
+    new_block->free = 1;
+    new_block->magic = MAGIC;
+
+    new_block->prev = block;
+    new_block->next = block->next;
+
+    if (new_block->next != NULL)
+        new_block->next->prev = new_block;
+    else
+        tail = new_block;
+
+    block->next = new_block;
+    block->size = size;
+}
+
 
 
 
