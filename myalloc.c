@@ -113,7 +113,7 @@ static void split_block(block_t *block, size_t size)
     block->next = new_block;
     block->size = size;
 }
-* Obtain more memory from the operating system.
+/* Obtain more memory from the operating system.
  * The minimum growth amount is 64 KB.
  */
 static block_t *grow_heap(size_t size)
