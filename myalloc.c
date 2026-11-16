@@ -205,6 +205,82 @@ static void coalesce(void)
     }
 }
 
+/* Allocate memory. */
+void *my_malloc(size_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    size = align_up(size);
+
+    if (size == 0)
+        return NULL;
+
+    block_t *block = find_fit(size);
+
+    if (block == NULL) {
+        block = grow_heap(size);
+
+        if (block == NULL)
+            return NULL;
+    }
+
+    split_block(block, size);
+
+    block->free = 0;
+
+    return payload(block);
+}
+
+/* Release memory. */
+void my_free(void *ptr)
+{
+    if (ptr == NULL)
+        return;
+
+    block_t *block = find_block(ptr);
+
+    if (block == NULL || block->magic != MAGIC) {
+        const char message[] = "my_free: invalid pointer\n";
+        write(STDERR_FILENO, message, sizeof(message) - 1);
+        return;
+    }
+
+    if (block->free) {
+        const char message[] = "my_free: double free detected\n";
+        write(STDERR_FILENO, message, sizeof(message) - 1);
+        return;
+    }
+
+    block->free = 1;
+
+    coalesce();
+}
+
+/* Allocate and zero-initialize memory. */
+void *my_calloc(size_t nmemb, size_t size)
+{
+    if (nmemb == 0 || size == 0)
+        return NULL;
+
+    if (nmemb > SIZE_MAX / size)
+        return NULL;
+
+    size_t total = nmemb * size;
+
+    void *ptr = my_malloc(total);
+
+    if (ptr != NULL)
+        memset(ptr, 0, total);
+
+    return ptr;
+}
+
+
+
+
+
+
 
 
 
