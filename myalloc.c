@@ -1,22 +1,48 @@
+
 #define _DEFAULT_SOURCE
 
 #include <stddef.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdio.h>
+#include <limits.h>
+
 #include "myalloc.h"
 
-/* Each payload must be aligned to a 16-byte boundary. */
 #define ALIGNMENT 16
 #define MAGIC 0x4D59414C
+#define MIN_HEAP_SIZE 65536
 
-/* Block header: metadata stored before each payload. */
 typedef struct block {
-    size_t size;          /* Payload size */
-    struct block *next;   /* Next block in address order */
-    int free;             /* 1 = free, 0 = allocated */
-    int magic;            /* Used to detect invalid pointers */
+    size_t size;
+    struct block *next;
+    struct block *prev;
+    int free;
+    int magic;
 } block_t;
+
+/* Header size is rounded to a multiple of 16. */
+#define HDR ((sizeof(block_t) + ALIGNMENT - 1) & ~(size_t)(ALIGNMENT - 1))
+
+static block_t *head = NULL;
+static block_t *tail = NULL;
+
+static size_t total_heap_bytes = 0;
+static fit_policy_t current_policy = FIT_FIRST;
+
+/* Round a number up to the next multiple of 16. */
+static size_t align_up(size_t size)
+{
+    if (size > SIZE_MAX - (ALIGNMENT - 1))
+        return 0;
+
+    return (size + ALIGNMENT - 1) & ~(size_t)(ALIGNMENT - 1);
+}
+
+
+
+
 
 /* Round header size up to a multiple of 16. */
 #define HDR ((sizeof(block_t) + ALIGNMENT - 1) & ~(size_t)(ALIGNMENT - 1))
